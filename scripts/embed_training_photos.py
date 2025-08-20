@@ -29,7 +29,7 @@ for doc in collection.find():
 
         with torch.no_grad():
             emb = model.get_image_features(**inputs)
-            emb = emb / emb.norm(p=2, dim=-1, keepdim=True)
+            emb = emb / emb.norm(p=2, dim=-1, keepdim=True) # normalized euclidean distance, so that we can train on angle for cosine-similiarity
             emb_list = emb.squeeze().cpu().tolist()
 
         collection.update_one(
