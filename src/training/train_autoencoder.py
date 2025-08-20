@@ -39,11 +39,13 @@ def build_dataset(k=1):
     return np.array(X), np.array(y), np.array(dump_ids)
 
 # =====================
-# Train/eval loop
+# Training loop
 # =====================
-def train_model(model, train_loader, device):
+def train_model(model, train_loader, device, epochs=20):
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
-    for epoch in range(20):
+    model.to(device)
+    for epoch in range(epochs):
+        model.train()
         for xb, yb in train_loader:
             xb, yb = xb.to(device), yb.to(device)
             optimizer.zero_grad()
@@ -54,12 +56,16 @@ def train_model(model, train_loader, device):
         print(f"Epoch {epoch+1}, Loss: {loss.item():.4f}")
     return model
 
+# =====================
+# Evaluation
+# =====================
 def evaluate_model(model, loader, name="Test"):
     model.eval()
     total_loss = 0
+    device = next(model.parameters()).device
     with torch.no_grad():
         for xb, yb in loader:
-            xb, yb = xb.to(next(model.parameters()).device), yb.to(next(model.parameters()).device)
+            xb, yb = xb.to(device), yb.to(device)
             preds = model(xb)
             total_loss += cosine_loss(preds, yb).item() * len(xb)
     avg_loss = total_loss / len(loader.dataset)
@@ -67,9 +73,9 @@ def evaluate_model(model, loader, name="Test"):
     return avg_loss
 
 # =====================
-# 10-fold Cross Validation
+# 10-fold cross-validation
 # =====================
-def cross_validate(X, y, device):
+def cross_validate(X, y, device, k_seq=1):
     kf = KFold(n_splits=10, shuffle=True, random_state=42)
     r2_scores, mse_scores, cos_losses = [], [], []
 
@@ -79,11 +85,11 @@ def cross_validate(X, y, device):
         X_train, y_train = X[train_idx].to(device), y[train_idx].to(device)
         X_test, y_test = X[test_idx].to(device), y[test_idx].to(device)
 
-        model = SeqAutoencoder(emb_dim=X.shape[2], hidden_dim=256, k=X.shape[1]).to(device)
+        model = SeqAutoencoder(emb_dim=X.shape[2], k=k_seq).to(device)
         optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
         # Train
-        for epoch in range(10):
+        for epoch in range(10):  # shorter epochs for CV
             model.train()
             optimizer.zero_grad()
             preds = model(X_train)
@@ -96,7 +102,6 @@ def cross_validate(X, y, device):
         with torch.no_grad():
             y_pred = model(X_test)
 
-        # Metrics
         cos_loss = cosine_loss(y_pred, y_test).item()
         y_true_np = y_test.cpu().numpy().reshape(len(test_idx), -1)
         y_pred_np = y_pred.cpu().numpy().reshape(len(test_idx), -1)
@@ -122,7 +127,7 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # --- Build dataset
-    X, y, dump_ids = build_dataset()
+    X, y, dump_ids = build_dataset(k=3)  # k-sequence
     X = torch.tensor(X, dtype=torch.float32)
     y = torch.tensor(y, dtype=torch.float32)
     full_dataset = TensorDataset(X, y)
@@ -145,19 +150,19 @@ if __name__ == "__main__":
     train_loader_dump = DataLoader(train_dataset_dump, batch_size=32, shuffle=True)
     test_loader_dump  = DataLoader(test_dataset_dump, batch_size=32, shuffle=False)
 
-    # --- Train on image-level (or dump-level)
-    model = SeqAutoencoder(emb_dim=512, hidden_dim=256, k=1).to(device)
-    model = train_model(model, train_loader_img, device)
+    # --- Train
+    model = SeqAutoencoder(emb_dim=512, k=3).to(device)
+    model = train_model(model, train_loader_dump, device)  # use dump-level split for training
 
     # --- Evaluate
     evaluate_model(model, test_loader_img, "Image-level Test")
     evaluate_model(model, test_loader_dump, "Dump-level Test")
 
-    # --- Run 10-fold CV
-    cross_validate(X, y, device)
+    # --- Cross-validation
+    cross_validate(X, y, device, k_seq=3)
 
     # --- Save final model
     model_path = "src/models/autoencoder.pth"
-    os.makedirs("models", exist_ok=True)
+    os.makedirs(os.path.dirname(model_path), exist_ok=True)
     torch.save(model.state_dict(), model_path)
     print(f"Model saved to {model_path}")
